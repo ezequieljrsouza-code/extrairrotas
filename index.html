@@ -376,7 +376,9 @@
       try {
         const result = await Tesseract.recognize(url, 'por', {});
         const text = result.data.text;
-        const ids = [...new Set((text.match(/(?<=#)\d+/g) || []))];
+        const byHash = (text.match(/[#＃№н]\s*(\d{7,10})/g) || []).map(m => m.replace(/[^0-9]/g, ''));
+        const byPattern = text.match(/\b3[78]\d{7}\b/g) || [];
+        const ids = [...new Set([...byHash, ...byPattern])];
         imgCount++;
         const added = addRoutes(ids, imgCount);
         updateStats();
