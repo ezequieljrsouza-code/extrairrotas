@@ -241,7 +241,7 @@
 <body>
   <div class="container">
     <h1>Extrator de IDs de Rotas</h1>
-    <p class="subtitle">Cole imagens para extrair IDs</code></p>
+    <p class="subtitle">Cole imagens para extrair os IDs</code></p>
 
     <div id="drop-zone" tabindex="0" role="button" aria-label="Cole ou arraste uma imagem aqui">
       <i class="ti ti-clipboard-text" aria-hidden="true"></i>
@@ -367,28 +367,85 @@
       navigator.clipboard.writeText(text).then(() => showToast('IDs copiados para a área de transferência!'));
     }
 
+    // Pré-processa imagem: escala 3x + binarização para melhorar OCR
+    function preprocessImage(imgUrl) {
+      return new Promise((resolve) => {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => {
+          const scale = 3;
+          const canvas = document.createElement('canvas');
+          canvas.width = img.width * scale;
+          canvas.height = img.height * scale;
+          const ctx = canvas.getContext('2d');
+
+          // Fundo branco
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+          // Desenha escalado
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+          // Binarização (preto/branco) com threshold alto
+          const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          const d = imageData.data;
+          for (let i = 0; i < d.length; i += 4) {
+            const gray = d[i] * 0.299 + d[i+1] * 0.587 + d[i+2] * 0.114;
+            const bw = gray < 140 ? 0 : 255;
+            d[i] = d[i+1] = d[i+2] = bw;
+          }
+          ctx.putImageData(imageData, 0, 0);
+
+          resolve(canvas.toDataURL('image/png'));
+        };
+        img.src = imgUrl;
+      });
+    }
+
     // Worker Tesseract v5 reutilizável
     let tWorker = null;
     async function getWorker() {
       if (!tWorker) {
-        tWorker = await Tesseract.createWorker('por', 1, {
+        tWorker = await Tesseract.createWorker('eng', 1, {
           logger: m => {
             if (m.status === 'recognizing text') {
               setStatus(`OCR: ${Math.round(m.progress * 100)}%`, 'var(--info-text)');
             }
           }
         });
-        // Parâmetros para melhorar leitura de números
         await tWorker.setParameters({
-          tessedit_char_whitelist: '0123456789#ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz·._- ',
           preserve_interword_spaces: '1',
         });
       }
       return tWorker;
     }
 
+    // Extrai IDs de um texto OCR
+    function extractIds(text) {
+      const all = [];
+
+      // 1) Após # ou variantes (mesma linha)
+      const r1 = text.match(/[#＃№][\s]*(\d{7,10})/g) || [];
+      r1.forEach(m => all.push(m.replace(/[^0-9]/g, '')));
+
+      // 2) Normalizado (sem quebras) — pega # + número em linhas separadas
+      const norm = text.replace(/[\r\n]+/g, ' ');
+      const r2 = norm.match(/[#＃№][\s]*(\d{7,10})/g) || [];
+      r2.forEach(m => all.push(m.replace(/[^0-9]/g, '')));
+
+      // 3) Padrão numérico puro: 9 dígitos começando com 37/38
+      const r3 = text.match(/\b3[78]\d{7}\b/g) || [];
+      r3.forEach(m => all.push(m));
+
+      // 4) Padrão com possível prefixo sujo (OCR lendo # como 4, H, etc)
+      const r4 = norm.match(/[^0-9](3[78]\d{7})(?=[^0-9]|$)/g) || [];
+      r4.forEach(m => { const d = m.replace(/[^0-9]/g, '').match(/3[78]\d{7}/); if (d) all.push(d[0]); });
+
+      return [...new Set(all.filter(id => id.length === 9))];
+    }
+
     async function processImage(file) {
-      setStatus('Iniciando OCR…', 'var(--info-text)');
+      setStatus('Pré-processando imagem…', 'var(--info-text)');
       dropZone.classList.add('highlight');
 
       const url = URL.createObjectURL(file);
@@ -396,33 +453,22 @@
       previewImg.style.display = 'block';
 
       try {
+        // Pré-processar: escalar + binarizar
+        const processedUrl = await preprocessImage(url);
+
         const worker = await getWorker();
-        const { data } = await worker.recognize(url);
+        const { data } = await worker.recognize(processedUrl);
         const text = data.text;
         console.log('=== OCR bruto ===\n', text);
 
-        // Estratégia 1: captura após # (com possível espaço)
-        const byHash = (text.match(/[#＃][\s]*(\d{7,10})/g) || [])
-          .map(m => m.replace(/[^0-9]/g, ''))
-          .filter(id => id.length >= 7);
-
-        // Estratégia 2: pelo padrão numérico 37x/38x com 9 dígitos
-        const byPattern = (text.match(/\b3[678]\d{7}\b/g) || []);
-
-        // Estratégia 3: texto normalizado (sem quebra de linha) para capturar # + número em linhas separadas
-        const normalized = text.replace(/[\r\n]+/g, ' ');
-        const byHashNorm = (normalized.match(/[#＃][\s]*(\d{7,10})/g) || [])
-          .map(m => m.replace(/[^0-9]/g, ''))
-          .filter(id => id.length >= 7);
-
-        const ids = [...new Set([...byHash, ...byHashNorm, ...byPattern])];
+        const ids = extractIds(text);
 
         imgCount++;
         const added = addRoutes(ids, imgCount);
         updateStats();
 
         if (ids.length === 0) {
-          setStatus('Nenhum ID encontrado. Tente uma imagem com maior resolução.', 'var(--warn-text)');
+          setStatus('Nenhum ID encontrado. Verifique o console (F12) para diagnóstico.', 'var(--warn-text)');
         } else {
           setStatus(`✓ ${added} novo(s) ID(s) adicionado(s) | ${ids.length - added} duplicata(s) ignorada(s).`, 'var(--success-text)');
         }
