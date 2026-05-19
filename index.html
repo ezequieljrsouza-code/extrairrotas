@@ -239,7 +239,7 @@
 <body>
   <div class="container">
     <h1>Extrator de IDs de Rotas</h1>
-    <p class="subtitle">Cole a imagem para extrair os IDs</code></p>
+    <p class="subtitle">Cole a imagem para extrair os IDs<code>380524124</code></p>
 
     <div id="drop-zone" tabindex="0" role="button" aria-label="Cole ou arraste uma imagem aqui">
       <i class="ti ti-clipboard-text" aria-hidden="true"></i>
@@ -376,8 +376,13 @@
       try {
         const result = await Tesseract.recognize(url, 'por', {});
         const text = result.data.text;
-        const byHash = (text.match(/[#＃№н]\s*(\d{7,10})/g) || []).map(m => m.replace(/[^0-9]/g, ''));
-        const byPattern = text.match(/\b3[78]\d{7}\b/g) || [];
+        console.log('=== OCR bruto ===\n', text);
+        // Normaliza o texto: remove quebras de linha e espaços extras
+        const normalized = text.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ');
+        // Captura dígitos após símbolos parecidos com # (com espaço opcional)
+        const byHash = (normalized.match(/[#＃№нH]\s*(\d{7,10})/g) || []).map(m => m.replace(/[^0-9]/g, ''));
+        // Fallback: qualquer número de 9 dígitos começando com 37 ou 38
+        const byPattern = normalized.match(/\b3[678]\d{7}\b/g) || [];
         const ids = [...new Set([...byHash, ...byPattern])];
         imgCount++;
         const added = addRoutes(ids, imgCount);
